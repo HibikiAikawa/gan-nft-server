@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import ReactDOM from "react-dom"
+import { Canvg } from 'canvg';
 import './App.css';
 import { ethers } from 'ethers';
 import contract from './contract/GanNft.json';
 import { Buffer } from 'buffer';
+import { getPngIpfsHash } from './utils/ipfs_uploader';
+import imageSvg from './image/test.svg';
 
 
 function App() {
@@ -38,6 +42,7 @@ function App() {
     }
 
   }
+
   const checkContract = async() => {
     const { ethereum } = window;
     const provider = new ethers.providers.Web3Provider(ethereum);
@@ -51,7 +56,6 @@ function App() {
     let txn = await nftContract.mintRequest();
     txn.wait();
   }
-
 
   const connectWallet = async() => {
     const { ethereum } = window;
@@ -72,27 +76,6 @@ function App() {
     }
   }
 
-  const py = async () => {
-    console.log('pushed py button.');
-    let output;
-    const r = (await fetch('http://localhost:5000/get-image')).json()
-    await r.then((result) => {output = result[0];});
-    return output.img;
-
-    
-    /* 
-    python-server からエンコードされたpngでーたが送られてくる
-    ↓
-    pngデータをIPFS化する
-    ↓
-    jsonファイルにIPFSデータを組み込む
-    ↓
-    encodeする(or ここもIPFS化する？)
-    ↓
-    返す
-    */
-  }
-
   const connectWalletButton = () => {
     return (
       <button onClick={connectWallet}>
@@ -110,13 +93,30 @@ function App() {
     )
   }
 
-  const pyButton = () => {
-    return (
-      <button onClick={py}>
-        python
-      </button>
-    )
+  const getBlob = (canvas) => {
+    return new Promise((resolve) => {
+      canvas.toBlob(resolve, 'image/svg+xml');
+    });
   }
+
+  const toIPFS = async (svgCode, filename) => {
+    const canvas = document.createElement('canvas');
+    const c = Canvg.fromString(canvas.getContext('2d'), svgCode);
+    await c.render();
+
+    const res = await getPngIpfsHash(await getBlob(canvas), filename);
+    console.log('image CID: ',res);
+    return res;
+  };
+
+  const getSvgCode = async () => {
+    console.log('pushed py button.');
+    let output;
+    const r = (await fetch('http://localhost:5000/get-image')).json()
+    await r.then((result) => {output = result[0];});
+    return output.img;
+  }
+
 
   useEffect(() => {
     checkIfWalletIsConnected();
@@ -130,21 +130,21 @@ function App() {
       const txCount =  await serverProvider.getTransactionCount(from);
       const wallet = new ethers.Wallet(process.env.REACT_APP_PRIVATE_KEY, serverProvider);
   
-      const nftContract = new ethers.Contract(contractAddress, abi, wallet);
+      const backendContract = new ethers.Contract(contractAddress, abi, wallet);
 
       // TODO 動的にgas代を変えられるようにする
       const overrides = {
           nonce: ethers.utils.hexlify(txCount),
           gasLimit: ethers.utils.hexlify(gasLimit),
-          gasPrice: ethers.utils.hexlify(gasPrice),
+          gasPrice: await (await serverProvider.getGasPrice()).toHexString(),
       }
-      
-      const imageURI = await py();
-      const json = '{"name": "GANNFT #0","image": "data:image/png;base64,' + imageURI + '}'
+      const code = await getSvgCode();
+      const cid = await toIPFS(code, 'sample');
+      const json = '{"name": "GANNFT #0","image": "https://gateway.pinata.cloud/ipfs/' + cid + '"}'
       const baseJson = Buffer.from(json).toString('base64');
       const URI = 'data:application/json;base64,' + baseJson;
       console.log('URI: ', URI);
-      const tx = await nftContract.setTokenURI(URI, overrides);
+      const tx = await backendContract.setTokenURI(URI, overrides);
       tx.wait();
       console.log('set Token URI - done.');
     }
@@ -159,15 +159,12 @@ function App() {
     }
   }, [nftContract])
 
-  
   return (
     <div className="App">
       <header className="App-header">
       </header>
       <div className='main-container'>
         {currentAccount ? mintNftButton() : connectWalletButton()}
-        {pyButton()}
-
       </div>
     </div>
   );
